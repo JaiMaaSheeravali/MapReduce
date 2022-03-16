@@ -7,35 +7,10 @@ package mr
 //
 
 import (
-	"os"
+	"fmt"
+	"net/rpc"
 	"time"
 )
-import "strconv"
-
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
-}
-
-type ExampleReply struct {
-	Y int
-}
-
-// Add your RPC definitions here.
-
-// Cook up a unique-ish UNIX-domain socket name
-// in /var/tmp, for the coordinator.
-// Can't use the current directory since
-// Athena AFS doesn't support UNIX-domain sockets.
-func coordinatorSock() string {
-	s := "/var/tmp/824-mr-"
-	s += strconv.Itoa(os.Getuid())
-	return s
-}
 
 type TaskType int8
 
@@ -76,8 +51,12 @@ type MapReduceTask struct {
 }
 
 // RequestTaskArgs : When a worker requests a task from coordinator,
-// it does not need to specify anything.
-type RequestTaskArgs struct{}
+// worker needs to specify its ip address on which it is listening.
+// worker is also acting as RPC server because coordinator needs to
+// check if the worker has crashed or not
+type RequestTaskArgs struct {
+	WorkerAddr string
+}
 
 // RequestTaskReply :  The coordinator replies with a MapReduceTask
 // which could either be a map job or a reduced job.
@@ -101,3 +80,34 @@ type SubmitTaskArgs struct {
 // SubmitTaskReply Here Master is always available
 // Coordinator replies with a success confirmation
 type SubmitTaskReply struct{}
+
+// Coordinator polls after every 10 seconds to worker,
+// for checking if it is alive and working.
+// If no reply comes back from the worker, the coordinator assumes the worker is dead,
+// and reassigns the MapReduceTask to another worker
+type RequestHealthArgs struct{}
+type RequestHealthReply struct{}
+
+// send an RPC request to the rpc server, wait for the response.
+// usually returns true.
+// returns false if something goes wrong.
+//
+func call(addr string, rpcname string, args interface{}, reply interface{}) bool {
+	c, err := rpc.DialHTTP("tcp", addr)
+	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
+	// sockname := coordinatorSock()
+	// c, err := rpc.DialHTTP("unix", sockname)
+	if err != nil {
+		fmt.Println("dialing: ", err)
+		return false
+	}
+	defer c.Close()
+
+	err = c.Call(rpcname, args, reply)
+	if err == nil {
+		return true
+	}
+
+	fmt.Println(err)
+	return false
+}
