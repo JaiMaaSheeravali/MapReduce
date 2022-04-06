@@ -28,6 +28,43 @@ type Coordinator struct {
 	mutex sync.Mutex
 }
 
+// helper function
+func taskTypeFromEnum(taskType TaskType) string {
+	var ret string
+	switch taskType {
+	case MAP:
+		ret = "MAPPER"
+	case REDUCE:
+		ret = "REDUCER"
+	case WAIT:
+		ret = "WAITING"
+	case EXIT:
+		ret = "EXITING"
+	}
+	return ret
+}
+
+func (c *Coordinator) checkWorkerHealthStatus(workerAddr string, task *MapReduceTask) {
+	for {
+		time.Sleep(10 * time.Second)
+		c.mutex.Lock()
+
+		if task.Status == ASSIGNED {
+			ok := call(workerAddr, "Worker.HealthStatus", &RequestHealthArgs{}, &RequestHealthReply{})
+			if !ok {
+				task.Status = UNASSIGNED
+				fmt.Println(taskTypeFromEnum(task.Type), task.Index, ": Timeout Reassigning task...")
+				c.mutex.Unlock()
+				break
+			}
+		} else if task.Status == FINISHED {
+			c.mutex.Unlock()
+			break
+		}
+		c.mutex.Unlock()
+	}
+}
+
 // Your code here -- RPC handlers for the worker to call.
 
 //
@@ -54,6 +91,9 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 				fmt.Fprintf(os.Stdout, "Mapper %d: working\n", task.Index)
 				c.mapTasks[i] = task
 				reply.Task = task
+
+				go c.checkWorkerHealthStatus(args.WorkerAddr, &c.mapTasks[i])
+
 				return nil
 			}
 		}
@@ -70,6 +110,9 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 				fmt.Fprintf(os.Stdout, "Reducer %d: working\n", task.Index)
 				c.reduceTasks[i] = task
 				reply.Task = task
+
+				go c.checkWorkerHealthStatus(args.WorkerAddr, &c.reduceTasks[i])
+
 				return nil
 			}
 		}
@@ -144,12 +187,15 @@ func (c *Coordinator) SubmitTask(args *SubmitTaskArgs, reply *SubmitTaskReply) e
 // start a thread that listens for RPCs from worker.go
 //
 func (c *Coordinator) server() {
-	rpc.Register(c)
+	err := rpc.Register(c)
+	if err != nil {
+		log.Fatal(c, "rpc could not be registered: ", err)
+	}
 	rpc.HandleHTTP()
-	//l, e := net.Listen("tcp", ":1234")
-	sockname := coordinatorSock()
-	os.Remove(sockname)
-	l, e := net.Listen("unix", sockname)
+	l, e := net.Listen("tcp", ":1234")
+	// sockname := coordinatorSock()
+	// os.Remove(sockname)
+	// l, e := net.Listen("unix", sockname)
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
