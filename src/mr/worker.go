@@ -156,7 +156,7 @@ func doMap(r *RequestTaskReply, mapf func(string, string) []KeyValue) {
 		}
 
 		// worker sometimes fails when processing the task. It might happen to write result to output files halfway.
-		// To avoid those garbage outputs, worker should be designed to write to an temp file and only when the
+		// To avoid those garbage outputs, worker should be designed to write to a temp file and only when the
 		// entire task gets submitted, master then marks them are valid output.
 		// note: tmpfile gets deleted automatically if the program exits
 		tmpfile, err := ioutil.TempFile("mr-tmp/", "mr")
