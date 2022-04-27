@@ -141,7 +141,7 @@ func doMap(hdfsClient *hdfs.Client, r *RequestTaskReply, mapf func(string, strin
 	}
 	err = file.Close()
 	if err != nil {
-		return
+		log.Fatal("cannot close input file ", filename, err)
 	}
 
 	// call the mapf on the content, and partition
@@ -157,7 +157,7 @@ func doMap(hdfsClient *hdfs.Client, r *RequestTaskReply, mapf func(string, strin
 	// 		to file system in json format for reducer to read.
 	// Note: in real mapreduce, mapper would write to the local disk
 	// 		and reducer would perform rpc to mapper to get the key-value pairs directly
-	var tmpFiles []*os.File
+	var tmpFiles []string
 	for _, kva := range partitionedKva {
 		// convert the key-value array to JSON string
 		jsonKva, err := json.Marshal(kva)
@@ -168,6 +168,7 @@ func doMap(hdfsClient *hdfs.Client, r *RequestTaskReply, mapf func(string, strin
 		// worker sometimes fails when processing the task. It might happen to write result to output files halfway.
 		// To avoid those garbage outputs, worker should be designed to write to a temp file.
 		// note: tmpfile will be deleted if the program exits
+		
 		tmpfile, err := ioutil.TempFile("mr-tmp/", "mr")
 		if err != nil {
 			log.Fatal(err)
@@ -176,10 +177,7 @@ func doMap(hdfsClient *hdfs.Client, r *RequestTaskReply, mapf func(string, strin
 		if _, err := tmpfile.Write(jsonKva); err != nil {
 			log.Fatal(err)
 		}
-		if err := tmpfile.Close(); err != nil {
-			log.Fatal(err)
-		}
-		tmpFiles = append(tmpFiles, tmpfile)
+		tmpFiles = append(tmpFiles, tmpfile.Name())
 	}
 
 	for i, tmpfile := range tmpFiles {
@@ -188,7 +186,7 @@ func doMap(hdfsClient *hdfs.Client, r *RequestTaskReply, mapf func(string, strin
 		// 		mapTask:    mr-<mapTask_idx>-<reduceTask_idx>
 		//      here mapTask_idx is "task.Index" and reduceTask_idx is "i"
 		//		reduceTask: mr-out-<reduceTask_idx>
-		intermediateFilename := fmt.Sprintf("mr-%d-%d", r.Task.Index, i)
+		intermediateFilename := fmt.Sprintf("/user/hdoop/output/temp/"+"mr-%d-%d", r.Task.Index, i)
 		args.Task.OutputFiles = append(args.Task.OutputFiles, intermediateFilename)
 
 		// transfer tempo file contents to HDFS
@@ -199,14 +197,26 @@ func doMap(hdfsClient *hdfs.Client, r *RequestTaskReply, mapf func(string, strin
 		}
 
 		// copy temp file content to HDFS file
-		buf, err := ioutil.ReadAll(tmpfile)
+		buf, err := ioutil.ReadFile(tmpfile)
+		// buf, err := ioutil.ReadAll(tmpfile)
 		if err != nil {
-			log.Fatal("Reading temp file failed")
+			log.Fatal("Reading temp file failed", err)
 		}
-		handle.Write(buf)
-
+		len, err := handle.Write(buf)
+		fmt.Println("Number of bytes return on intermediate file -> ", len)	
+		if err != nil {
+			log.Fatal("Writing mr- hdfs", err)
+		}
+		err = handle.Close()
+		if err != nil {
+			log.Fatal("Closing failed on HDFS", err)
+		}
 		// delete the temp file
-		tmpfile.Close()
+		// tmpfile.Close()
+		err = os.Remove(tmpfile)
+		if err != nil {
+			log.Fatal("Removing temp file failed", err)
+		}
 	}
 
 	args.Task.TimeStamp = time.Now()
@@ -242,9 +252,9 @@ func doReduce(hdfsClient *hdfs.Client, r *RequestTaskReply, reducef func(string,
 	for _, filename := range r.Task.InputFiles {
 		// open the intermediate file and read all of its content
 		// intermediateFile, err := os.Open("mr-tmp/" + filename)
-		intermediateFile, err := hdfsClient.Open("mr-tmp" + filename)
+		intermediateFile, err := hdfsClient.Open(filename)
 		if err != nil {
-			log.Fatalf("cannot open %v", filename)
+			log.Fatal("cannot open ", filename, err)
 		}
 		jsonKva, err := ioutil.ReadAll(intermediateFile)
 		if err != nil {
@@ -252,7 +262,7 @@ func doReduce(hdfsClient *hdfs.Client, r *RequestTaskReply, reducef func(string,
 		}
 		err = intermediateFile.Close()
 		if err != nil {
-			return
+			log.Fatal("cannot close ", filename," ", err)
 		}
 
 		var tempKva []KeyValue
@@ -268,7 +278,7 @@ func doReduce(hdfsClient *hdfs.Client, r *RequestTaskReply, reducef func(string,
 	sort.Sort(ByKey(kva))
 	fmt.Fprintf(os.Stdout, "Reducer %d: completed sorting\n", r.Task.Index)
 
-	oname := fmt.Sprintf("mr-out-%d", r.Task.Index)
+	oname := fmt.Sprintf("/user/hdoop/output/"+"mr-out-%d", r.Task.Index)
 	// ofile, _ := os.Create(oname)
 	ofile, err := hdfsClient.Create(oname)
 	if err != nil {
@@ -310,7 +320,7 @@ func doReduce(hdfsClient *hdfs.Client, r *RequestTaskReply, reducef func(string,
 	// send the RPC request, wait for the reply.
 	ok := call("127.0.0.1"+":1234", "Coordinator.SubmitTask", &args, &reply)
 	if !ok {
-		log.Fatal("rpc failed")
+		log.Fatal("rpc failed reducer")
 	}
 
 	fmt.Fprintf(os.Stdout, "Reducer %d: completed\n", r.Task.Index)

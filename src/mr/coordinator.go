@@ -158,12 +158,12 @@ func (c *Coordinator) SubmitTask(args *SubmitTaskArgs, reply *SubmitTaskReply) e
 		c.reduceDone++
 
 		// delete all the intermediate files on which the completed reducer worked upon
-		for _, intermediateFilename := range task.InputFiles {
-			err := os.Remove("mr-tmp/" + intermediateFilename)
-			if err != nil {
-				return err
-			}
-		}
+		// for _, intermediateFilename := range task.InputFiles {
+		// 	err := os.Remove("mr-tmp/" + intermediateFilename)
+		// 	if err != nil {
+		// 		return err
+		// 	}
+		// }
 	default:
 		return errors.New("submitted task can only be map or reduce")
 	}

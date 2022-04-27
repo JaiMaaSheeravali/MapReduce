@@ -7,6 +7,7 @@ package mr
 //
 
 import (
+	"log"
 	"fmt"
 	"net/rpc"
 	"time"
@@ -108,6 +109,6 @@ func call(addr string, rpcname string, args interface{}, reply interface{}) bool
 		return true
 	}
 
-	fmt.Println(err)
+	log.Fatal(err)
 	return false
 }
