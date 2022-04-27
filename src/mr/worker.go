@@ -3,6 +3,7 @@ package mr
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/colinmarc/hdfs/v2"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -69,6 +70,13 @@ func (w *Worker) HealthStatus(args *RequestHealthArgs, reply *RequestHealthReply
 func MakeWorker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
+	// connect to the hadoop file system
+	hdfsClient, err := hdfs.New("localhost:9000")
+
+	if err != nil {
+		log.Fatal("Couldn't connect to HDFS\n", err)
+	}
+
 	// create a rpc server on Worker for coordinator to poll the health status of a MapReduceTask
 	w := Worker{}
 	workerAddr := w.server()
@@ -91,9 +99,9 @@ func MakeWorker(mapf func(string, string) []KeyValue,
 
 		switch reply.Task.Type {
 		case MAP:
-			doMap(&reply, mapf)
+			doMap(hdfsClient, &reply, mapf)
 		case REDUCE:
-			doReduce(&reply, reducef)
+			doReduce(hdfsClient, &reply, reducef)
 		case WAIT:
 			fmt.Println("Waiting...")
 			time.Sleep(10 * time.Second)
@@ -105,7 +113,7 @@ func MakeWorker(mapf func(string, string) []KeyValue,
 }
 
 // doMap: For Map task, it’s expected to have 1 filename in InputFiles and nReduce of filenames in OutputFile.
-func doMap(r *RequestTaskReply, mapf func(string, string) []KeyValue) {
+func doMap(hdfsClient *hdfs.Client, r *RequestTaskReply, mapf func(string, string) []KeyValue) {
 	numReducers := r.NReduce         // required for partitioning hash function
 	filename := r.Task.InputFiles[0] // only one file will be in InputFiles for a map job
 
@@ -122,9 +130,10 @@ func doMap(r *RequestTaskReply, mapf func(string, string) []KeyValue) {
 	}
 
 	// open the input file and read all of its content
-	file, err := os.Open(filename)
+	//file, err := os.Open(filename)
+	file, err := hdfsClient.Open(filename)
 	if err != nil {
-		log.Fatalf("cannot open %v", filename)
+		log.Fatalf("cannot open %s\n%v", filename, err)
 	}
 	content, err := ioutil.ReadAll(file)
 	if err != nil {
@@ -148,6 +157,7 @@ func doMap(r *RequestTaskReply, mapf func(string, string) []KeyValue) {
 	// 		to file system in json format for reducer to read.
 	// Note: in real mapreduce, mapper would write to the local disk
 	// 		and reducer would perform rpc to mapper to get the key-value pairs directly
+	var tmpFiles []*os.File
 	for _, kva := range partitionedKva {
 		// convert the key-value array to JSON string
 		jsonKva, err := json.Marshal(kva)
@@ -156,9 +166,8 @@ func doMap(r *RequestTaskReply, mapf func(string, string) []KeyValue) {
 		}
 
 		// worker sometimes fails when processing the task. It might happen to write result to output files halfway.
-		// To avoid those garbage outputs, worker should be designed to write to a temp file and only when the
-		// entire task gets submitted, master then marks them are valid output.
-		// note: tmpfile gets deleted automatically if the program exits
+		// To avoid those garbage outputs, worker should be designed to write to a temp file.
+		// note: tmpfile will be deleted if the program exits
 		tmpfile, err := ioutil.TempFile("mr-tmp/", "mr")
 		if err != nil {
 			log.Fatal(err)
@@ -170,9 +179,36 @@ func doMap(r *RequestTaskReply, mapf func(string, string) []KeyValue) {
 		if err := tmpfile.Close(); err != nil {
 			log.Fatal(err)
 		}
-		// mr-x-i.json, where x is the mapper id, i: the partition number
-		args.Task.OutputFiles = append(args.Task.OutputFiles, tmpfile.Name())
+		tmpFiles = append(tmpFiles, tmpfile)
 	}
+
+	for i, tmpfile := range tmpFiles {
+		// rename the temporary intermediate files created above and write to hdfs
+		// validName :=
+		// 		mapTask:    mr-<mapTask_idx>-<reduceTask_idx>
+		//      here mapTask_idx is "task.Index" and reduceTask_idx is "i"
+		//		reduceTask: mr-out-<reduceTask_idx>
+		intermediateFilename := fmt.Sprintf("mr-%d-%d", r.Task.Index, i)
+		args.Task.OutputFiles = append(args.Task.OutputFiles, intermediateFilename)
+
+		// transfer tempo file contents to HDFS
+		// by creating a new intermediate file in HDFS
+		handle, err := hdfsClient.Create(intermediateFilename)
+		if err != nil {
+			log.Fatalf("Mapper %d could not create intermediate file %s %s", r.Task.Index, intermediateFilename, err)
+		}
+
+		// copy temp file content to HDFS file
+		buf, err := ioutil.ReadAll(tmpfile)
+		if err != nil {
+			log.Fatal("Reading temp file failed")
+		}
+		handle.Write(buf)
+
+		// delete the temp file
+		tmpfile.Close()
+	}
+
 	args.Task.TimeStamp = time.Now()
 
 	// declare a reply structure.
@@ -189,7 +225,7 @@ func doMap(r *RequestTaskReply, mapf func(string, string) []KeyValue) {
 }
 
 // doReduce: For Reduce task, it’s expected to have nReduce of filenames in InputFiles and 1 file name in OutputFile
-func doReduce(r *RequestTaskReply, reducef func(string, []string) string) {
+func doReduce(hdfsClient *hdfs.Client, r *RequestTaskReply, reducef func(string, []string) string) {
 	// send output filename to coordinator after completion
 	// declare an argument structure.
 	fmt.Fprintf(os.Stdout, "Reducer %d: started executing\n", r.Task.Index)
@@ -205,7 +241,8 @@ func doReduce(r *RequestTaskReply, reducef func(string, []string) string) {
 	var kva []KeyValue
 	for _, filename := range r.Task.InputFiles {
 		// open the intermediate file and read all of its content
-		intermediateFile, err := os.Open("mr-tmp/" + filename)
+		// intermediateFile, err := os.Open("mr-tmp/" + filename)
+		intermediateFile, err := hdfsClient.Open("mr-tmp" + filename)
 		if err != nil {
 			log.Fatalf("cannot open %v", filename)
 		}
@@ -229,11 +266,14 @@ func doReduce(r *RequestTaskReply, reducef func(string, []string) string) {
 	fmt.Fprintf(os.Stdout, "Reducer %d: started sorting\n", r.Task.Index)
 
 	sort.Sort(ByKey(kva))
+	fmt.Fprintf(os.Stdout, "Reducer %d: completed sorting\n", r.Task.Index)
 
 	oname := fmt.Sprintf("mr-out-%d", r.Task.Index)
-	ofile, _ := os.Create(oname)
-
-	fmt.Fprintf(os.Stdout, "Reducer %d: completed sorting\n", r.Task.Index)
+	// ofile, _ := os.Create(oname)
+	ofile, err := hdfsClient.Create(oname)
+	if err != nil {
+		log.Fatalf("Reducer %d couldn't create output file %s %s", r.Task.Index, oname, err)
+	}
 
 	// call Reduce on each distinct key in kva[],
 	// and print the result to mr-out-x, where x is the reducer id.
@@ -256,7 +296,7 @@ func doReduce(r *RequestTaskReply, reducef func(string, []string) string) {
 		i = j
 	}
 
-	err := ofile.Close()
+	err = ofile.Close()
 	if err != nil {
 		log.Fatal("Error closing output file ", oname, err)
 	}
@@ -274,5 +314,4 @@ func doReduce(r *RequestTaskReply, reducef func(string, []string) string) {
 	}
 
 	fmt.Fprintf(os.Stdout, "Reducer %d: completed\n", r.Task.Index)
-
 }
