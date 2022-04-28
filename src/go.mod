@@ -14,4 +14,5 @@ require (
 	golang.org/x/crypto v0.0.0-20201112155050-0c6587e931a9 // indirect
 	golang.org/x/net v0.0.0-20200114155413-6afb5195e5aa // indirect
 	google.golang.org/protobuf v1.27.1 // indirect
+	github.com/joho/godotenv v1.4.0 // indirect
 )

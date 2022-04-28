@@ -173,13 +173,13 @@ func (c *Coordinator) SubmitTask(args *SubmitTaskArgs, reply *SubmitTaskReply) e
 //
 // start a thread that listens for RPCs from worker.go
 //
-func (c *Coordinator) server() {
+func (c *Coordinator) server(port string) {
 	err := rpc.Register(c)
 	if err != nil {
 		log.Fatal(c, "rpc could not be registered: ", err)
 	}
 	rpc.HandleHTTP()
-	l, e := net.Listen("tcp", ":1234")
+	l, e := net.Listen("tcp", ":"+port)
 	// sockname := coordinatorSock()
 	// os.Remove(sockname)
 	// l, e := net.Listen("unix", sockname)
@@ -205,7 +205,7 @@ func (c *Coordinator) Done() bool {
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 //
-func MakeCoordinator(files []string, nReduce int) *Coordinator {
+func MakeCoordinator(files []string, nReduce int, port string) *Coordinator {
 	c := Coordinator{
 		inputFiles:  files,
 		nReduce:     nReduce,
@@ -239,6 +239,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		c.reduceTasks[i] = newReduceTask
 	}
 
-	c.server()
+	c.server(port)
 	return &c
 }
