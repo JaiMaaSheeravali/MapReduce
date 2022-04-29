@@ -233,7 +233,7 @@ func doMap(hdfsClient *hdfs.Client, r *RequestTaskReply, mapf func(string, strin
 		}
 
 		len, err := handle.Write(buf)
-		
+
 		fmt.Println("Number of bytes return on intermediate file -> ", len)
 		if err != nil {
 			log.Fatal("Writing mr- hdfs", err)

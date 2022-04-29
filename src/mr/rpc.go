@@ -7,8 +7,8 @@ package mr
 //
 
 import (
-	"log"
 	"fmt"
+	"log"
 	"net/rpc"
 	"time"
 )

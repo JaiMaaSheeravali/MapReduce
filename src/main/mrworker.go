@@ -15,25 +15,18 @@ import "log"
 import "flag"
 
 var (
-	port    *string
+	port  *string
 	mrapp *string
 )
 
 func init() {
 	port = flag.String("port", "1234", "port number")
-	mrapp = flag.String("mrapp", "wc.so", "mrapp name : wc.so")	
+	mrapp = flag.String("mrapp", "wc.so", "mrapp name : wc.so")
 }
 
-
 func main() {
-
-	// if len(os.Args) != 2 {
-	// 	fmt.Fprintf(os.Stderr, "Usage: mrworker xxx.so\n")
-	// 	os.Exit(1)
-	// }
-	
 	flag.Parse()
-	
+
 	mapf, reducef := loadPlugin(*mrapp)
 
 	mr.MakeWorker(mapf, reducef, *port)

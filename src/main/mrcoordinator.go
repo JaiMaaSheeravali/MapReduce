@@ -33,11 +33,11 @@ func goDotEnvVariable(key string) string {
 
 	// load .env file
 	err := godotenv.Load("../.env")
-  
+
 	if err != nil {
-	  log.Fatalf("Error loading .env file")
+		log.Fatalf("Error loading .env file")
 	}
-  
+
 	return os.Getenv(key)
 }
 
@@ -48,7 +48,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: -port <port> -nreduce <number of reducer> mrcoordinator inputfiles...\n")
 		os.Exit((1))
 	}
-	
+
 	// connect to the hadoop file system
 	hdfsClient, err := hdfs.New("localhost:9000")
 
@@ -68,5 +68,4 @@ func main() {
 	}
 
 	time.Sleep(time.Second)
-
 }
